@@ -12,10 +12,10 @@
   summary at the end. Requires PowerShell 5.1+ (7+ recommended).
 
 .EXAMPLE
-  .\setup-agents.ps1
-  .\setup-agents.ps1 -DryRun
-  .\setup-agents.ps1 -NoRoblox -Mode full
-  .\setup-agents.ps1 -Force
+  .\install.ps1
+  .\install.ps1 -DryRun
+  .\install.ps1 -NoRoblox -Mode full
+  .\install.ps1 -Force
 #>
 [CmdletBinding()]
 param(

@@ -5,11 +5,11 @@
 # step: each failure is collected and printed as a warning summary at the end.
 #
 # Usage:
-#   bash setup-agents.sh              # install everything detected
-#   bash setup-agents.sh --dry-run    # print what would happen, change nothing
-#   bash setup-agents.sh --no-roblox  # skip the Roblox Studio MCP server
-#   bash setup-agents.sh --mode full  # caveman default mode (default: ultra)
-#   bash setup-agents.sh --force      # reinstall even if already present
+#   bash install.sh              # install everything detected
+#   bash install.sh --dry-run    # print what would happen, change nothing
+#   bash install.sh --no-roblox  # skip the Roblox Studio MCP server
+#   bash install.sh --mode full  # caveman default mode (default: ultra)
+#   bash install.sh --force      # reinstall even if already present
 
 set -uo pipefail   # deliberately no -e: a failed agent must not kill the run
 
