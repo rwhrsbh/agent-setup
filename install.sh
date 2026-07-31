@@ -16,6 +16,7 @@ set -uo pipefail   # deliberately no -e: a failed agent must not kill the run
 RBX_PKG="@chrrxs/robloxstudio-mcp"
 RBX_VERSION="2.23.0"
 RBX_SKILL_REPO="https://github.com/brockmartin/roblox-game-skill"
+RBX_SKILL_SLUG="brockmartin/roblox-game-skill"   # form the skills CLI expects
 CAVEMAN_MODE_DEFAULT="ultra"
 DRY_RUN=0
 DO_ROBLOX=1
@@ -348,6 +349,30 @@ MANIFEST
       fi
       info "agy needs Google OAuth on first run: agy"
     fi
+
+    # --- Codex and the other `npx skills` agents.
+    # Same mechanism caveman uses for them: the upstream skills CLI writes into
+    # each agent's own profile. -g installs user-wide instead of into $PWD.
+    for prof in codex cursor windsurf cline github-copilot trae; do
+      case "$prof" in
+        codex)          command -v codex >/dev/null 2>&1 || continue ;;
+        cursor)         [ -d "$HOME/.cursor" ] || continue ;;
+        windsurf)       [ -d "$HOME/.codeium/windsurf" ] || continue ;;
+        cline)          [ -d "$HOME/.clinerules" ] || continue ;;
+        github-copilot) [ -d "$HOME/.config/github-copilot" ] || [ -d "$HOME/.copilot" ] || continue ;;
+        trae)           [ -d "$HOME/.trae" ] || continue ;;
+      esac
+      if [ "$DRY_RUN" = 1 ]; then
+        info "\$ npx skills add $RBX_SKILL_SLUG -a $prof -g"
+        continue
+      fi
+      SK_OUT=$(npx -y skills add "$RBX_SKILL_SLUG" --skill '*' -a "$prof" -g --yes 2>&1 || true)
+      if printf '%s' "$SK_OUT" | grep -q 'roblox-game'; then
+        ok "$prof: roblox-game skill installed"
+      else
+        warn "$prof: roblox-game skill install failed"
+      fi
+    done
   else
     warn "could not clone $RBX_SKILL_REPO — roblox-game skill skipped"
   fi

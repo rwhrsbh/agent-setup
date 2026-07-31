@@ -30,6 +30,7 @@ $ErrorActionPreference = 'Continue'   # a failed agent must not kill the run
 $RbxPkg      = '@chrrxs/robloxstudio-mcp'
 $RbxVersion  = '2.23.0'
 $RbxSkillRepo = 'https://github.com/brockmartin/roblox-game-skill'
+$RbxSkillSlug = 'brockmartin/roblox-game-skill'   # form the skills CLI expects
 
 $script:Warnings = [System.Collections.ArrayList]::new()
 $script:Skipped  = [System.Collections.ArrayList]::new()
@@ -326,6 +327,26 @@ if (-not $NoRoblox) {
           Ok "antigravity imported: $($agyGot -join ' + ')"
         } else { Warn 'agy plugin import gemini imported nothing' }
         Info 'agy needs Google OAuth on first run: agy'
+      }
+
+      # --- Codex and the other `npx skills` agents.
+      # Same mechanism caveman uses for them: the upstream skills CLI writes
+      # into each agent's own profile. -g installs user-wide, not into $PWD.
+      $npxProfiles = @(
+        @{ id = 'codex';          test = { Test-Cmd codex } },
+        @{ id = 'cursor';         test = { Test-Path (Join-Path $HomeDir '.cursor') } },
+        @{ id = 'windsurf';       test = { Test-Path (Join-Path (Join-Path $HomeDir '.codeium') 'windsurf') } },
+        @{ id = 'cline';          test = { Test-Path (Join-Path $HomeDir '.clinerules') } },
+        @{ id = 'github-copilot'; test = { (Test-Path (Join-Path $HomeDir '.copilot')) -or (Test-Path (Join-Path (Join-Path $HomeDir '.config') 'github-copilot')) } },
+        @{ id = 'trae';           test = { Test-Path (Join-Path $HomeDir '.trae') } }
+      )
+      foreach ($p in $npxProfiles) {
+        if (-not (& $p.test)) { continue }
+        if ($DryRun) { Info "`$ npx skills add $RbxSkillSlug -a $($p.id) -g"; continue }
+        $skOut = (& npx -y skills add $RbxSkillSlug --skill '*' -a $p.id -g --yes 2>&1 | Out-String)
+        if ($skOut -match 'roblox-game') {
+          Ok "$($p.id): roblox-game skill installed"
+        } else { Warn "$($p.id): roblox-game skill install failed" }
       }
     }
   }

@@ -24,8 +24,8 @@ Sets up [caveman](https://github.com/JuliusBrussee/caveman) in ultra mode, the
 | opencode | ✅ | — | ✅ | ✅ |
 | Gemini CLI | ✅ | — | ✅ | ✅ |
 | Antigravity (`agy`) | ✅ | — | ✅ | ✅ |
-| Codex | ✅ | — | ✅ | — |
-| Cursor · Copilot · Trae · … | ✅ | — | — | — |
+| Codex | ✅ | — | ✅ | ✅ |
+| Cursor · Windsurf · Cline · Copilot · Trae | ✅ | — | — | ✅ |
 
 Badge is Claude Code only — it's the one agent with a configurable statusline.
 opencode's TUI has no plugin-writable badge; Gemini, Antigravity and Codex have no
@@ -42,11 +42,11 @@ curl -fsSL .../install.sh | bash -s -- --mode full   # lite · full · ultra · 
 curl -fsSL .../install.sh | bash -s -- --force       # reinstall
 ```
 
-PowerShell takes the same flags as `-DryRun`, `-NoRoblox`, `-Mode full`, `-Force` —
-via a scriptblock, since `iex` can't pass parameters:
+`iex` can't pass parameters, so on Windows save the file first:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/rwhrsbh/agent-setup/main/install.ps1))) -DryRun
+irm https://raw.githubusercontent.com/rwhrsbh/agent-setup/main/install.ps1 -OutFile install.ps1
+.\install.ps1 -DryRun      # -NoRoblox · -Mode full · -Force
 ```
 
 ## Good to know
