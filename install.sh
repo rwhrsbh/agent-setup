@@ -31,7 +31,20 @@ while [ $# -gt 0 ]; do
     --no-roblox) DO_ROBLOX=0 ;;
     --force)     FORCE=1 ;;
     --mode)      CAVEMAN_MODE_DEFAULT="${2:-ultra}"; shift ;;
-    -h|--help)   sed -n '2,14p' "$0"; exit 0 ;;
+    -h|--help)
+      # Inline rather than sed-ing "$0": under `curl | bash` there is no script
+      # file to read — $0 is just "bash".
+      cat <<'USAGE'
+install — caveman (ultra) + robloxstudio-mcp across every agent found.
+
+Usage:
+  bash install.sh              install everything detected
+  bash install.sh --dry-run    print what would happen, change nothing
+  bash install.sh --no-roblox  skip the Roblox Studio MCP server + skill
+  bash install.sh --mode full  caveman default mode (default: ultra)
+  bash install.sh --force      reinstall even if already present
+USAGE
+      exit 0 ;;
     *) echo "unknown flag: $1" >&2; exit 1 ;;
   esac
   shift
