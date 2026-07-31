@@ -332,16 +332,39 @@ if (-not $NoRoblox) {
       # --- Codex and the other `npx skills` agents.
       # Same mechanism caveman uses for them: the upstream skills CLI writes
       # into each agent's own profile. -g installs user-wide, not into $PWD.
+      #
+      # Catch: codex, cursor, cline and copilot all land in the shared
+      # ~/.agents/skills tree, which Gemini CLI also scans. Installing there
+      # while the gemini extension exists makes Gemini report a skill conflict
+      # and override one copy with the other. Those profiles are skipped when
+      # the extension already provides the skill. windsurf and trae write to
+      # their own directories and are always safe.
+      $sharedSkillsDir = Join-Path (Join-Path $HomeDir '.agents') 'skills'
+      $gemHasRgs = Test-Path (Join-Path (Join-Path $GeminiDir 'extensions') 'roblox-game')
+      if ($gemHasRgs) {
+        $dupRgs = Join-Path $sharedSkillsDir 'roblox-game'
+        if ((Test-Path $dupRgs) -and -not $DryRun) {
+          # Clear a duplicate left by an earlier run, otherwise Gemini keeps
+          # reporting the conflict.
+          Remove-Item $dupRgs -Recurse -Force -ErrorAction SilentlyContinue
+          Ok 'removed duplicate roblox-game from ~/.agents/skills'
+        }
+      }
+
       $npxProfiles = @(
-        @{ id = 'codex';          test = { Test-Cmd codex } },
-        @{ id = 'cursor';         test = { Test-Path (Join-Path $HomeDir '.cursor') } },
-        @{ id = 'windsurf';       test = { Test-Path (Join-Path (Join-Path $HomeDir '.codeium') 'windsurf') } },
-        @{ id = 'cline';          test = { Test-Path (Join-Path $HomeDir '.clinerules') } },
-        @{ id = 'github-copilot'; test = { (Test-Path (Join-Path $HomeDir '.copilot')) -or (Test-Path (Join-Path (Join-Path $HomeDir '.config') 'github-copilot')) } },
-        @{ id = 'trae';           test = { Test-Path (Join-Path $HomeDir '.trae') } }
+        @{ id = 'codex';          shared = $true;  test = { Test-Cmd codex } },
+        @{ id = 'cursor';         shared = $true;  test = { Test-Path (Join-Path $HomeDir '.cursor') } },
+        @{ id = 'windsurf';       shared = $false; test = { Test-Path (Join-Path (Join-Path $HomeDir '.codeium') 'windsurf') } },
+        @{ id = 'cline';          shared = $true;  test = { Test-Path (Join-Path $HomeDir '.clinerules') } },
+        @{ id = 'github-copilot'; shared = $true;  test = { (Test-Path (Join-Path $HomeDir '.copilot')) -or (Test-Path (Join-Path (Join-Path $HomeDir '.config') 'github-copilot')) } },
+        @{ id = 'trae';           shared = $false; test = { Test-Path (Join-Path $HomeDir '.trae') } }
       )
       foreach ($p in $npxProfiles) {
         if (-not (& $p.test)) { continue }
+        if ($p.shared -and $gemHasRgs) {
+          Skip "$($p.id): uses ~/.agents/skills, already covered by the gemini extension"
+          continue
+        }
         if ($DryRun) { Info "`$ npx skills add $RbxSkillSlug -a $($p.id) -g"; continue }
         $skOut = (& npx -y skills add $RbxSkillSlug --skill '*' -a $p.id -g --yes 2>&1 | Out-String)
         if ($skOut -match 'roblox-game') {

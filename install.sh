@@ -353,15 +353,40 @@ MANIFEST
     # --- Codex and the other `npx skills` agents.
     # Same mechanism caveman uses for them: the upstream skills CLI writes into
     # each agent's own profile. -g installs user-wide instead of into $PWD.
+    #
+    # Catch: codex, cursor, cline and copilot all land in the shared
+    # ~/.agents/skills tree, which Gemini CLI also scans. Installing there while
+    # the gemini extension exists makes Gemini report a skill conflict and
+    # override one copy with the other. So those profiles are skipped whenever
+    # the extension is already providing the skill. windsurf and trae write to
+    # their own directories and are always safe.
+    GEM_HAS_RGS=0
+    if [ -d "$GEMINI_DIR/extensions/roblox-game" ]; then
+      GEM_HAS_RGS=1
+      # Clear a duplicate left by an earlier run, otherwise Gemini keeps
+      # reporting the conflict.
+      if [ -d "$HOME/.agents/skills/roblox-game" ] && [ "$DRY_RUN" = 0 ]; then
+        rm -rf "$HOME/.agents/skills/roblox-game"
+        ok "removed duplicate roblox-game from ~/.agents/skills"
+      fi
+    fi
+
     for prof in codex cursor windsurf cline github-copilot trae; do
+      SHARED=0
       case "$prof" in
-        codex)          command -v codex >/dev/null 2>&1 || continue ;;
-        cursor)         [ -d "$HOME/.cursor" ] || continue ;;
+        codex)          command -v codex >/dev/null 2>&1 || continue; SHARED=1 ;;
+        cursor)         [ -d "$HOME/.cursor" ] || continue; SHARED=1 ;;
         windsurf)       [ -d "$HOME/.codeium/windsurf" ] || continue ;;
-        cline)          [ -d "$HOME/.clinerules" ] || continue ;;
-        github-copilot) [ -d "$HOME/.config/github-copilot" ] || [ -d "$HOME/.copilot" ] || continue ;;
+        cline)          [ -d "$HOME/.clinerules" ] || continue; SHARED=1 ;;
+        github-copilot) { [ -d "$HOME/.config/github-copilot" ] || [ -d "$HOME/.copilot" ]; } || continue; SHARED=1 ;;
         trae)           [ -d "$HOME/.trae" ] || continue ;;
       esac
+
+      if [ "$SHARED" = 1 ] && [ "$GEM_HAS_RGS" = 1 ]; then
+        skip "$prof: uses ~/.agents/skills, already covered by the gemini extension"
+        continue
+      fi
+
       if [ "$DRY_RUN" = 1 ]; then
         info "\$ npx skills add $RBX_SKILL_SLUG -a $prof -g"
         continue

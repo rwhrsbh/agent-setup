@@ -24,12 +24,19 @@ Sets up [caveman](https://github.com/JuliusBrussee/caveman) in ultra mode, the
 | opencode | ✅ | — | ✅ | ✅ |
 | Gemini CLI | ✅ | — | ✅ | ✅ |
 | Antigravity (`agy`) | ✅ | — | ✅ | ✅ |
-| Codex | ✅ | — | ✅ | ✅ |
-| Cursor · Windsurf · Cline · Copilot · Trae | ✅ | — | — | ✅ |
+| Codex | ✅ | — | ✅ | ✳️ |
+| Windsurf · Trae | ✅ | — | — | ✅ |
+| Cursor · Cline · Copilot | ✅ | — | — | ✳️ |
 
 Badge is Claude Code only — it's the one agent with a configurable statusline.
 opencode's TUI has no plugin-writable badge; Gemini, Antigravity and Codex have no
 statusline hook at all.
+
+✳️ Codex, Cursor, Cline and Copilot all read skills from the shared
+`~/.agents/skills` tree — which Gemini CLI scans too. Installing there alongside the
+Gemini extension makes Gemini report a skill conflict and shadow one copy with the
+other, so the skill goes in only when Gemini isn't already providing it. If you don't
+use Gemini CLI, they get it outright.
 
 Ultra mode is the default. Change it with `--mode lite|full|ultra`.
 
