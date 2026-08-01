@@ -17,9 +17,13 @@ RBX_PKG="@chrrxs/robloxstudio-mcp"
 RBX_VERSION="2.23.0"
 RBX_SKILL_REPO="https://github.com/brockmartin/roblox-game-skill"
 RBX_SKILL_SLUG="brockmartin/roblox-game-skill"   # form the skills CLI expects
+# Design/taste skill packs. All are plain `npx skills` repos, so one command
+# each covers every agent — see the install loop for why `-a '*'` is enough.
+DESIGN_SKILL_REPOS="emilkowalski/skills Leonxlnx/taste-skill pbakaus/impeccable"
 CAVEMAN_MODE_DEFAULT="ultra"
 DRY_RUN=0
 DO_ROBLOX=1
+DO_DESIGN=1
 FORCE=0
 
 WARNINGS=()
@@ -30,18 +34,21 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run)   DRY_RUN=1 ;;
     --no-roblox) DO_ROBLOX=0 ;;
+    --no-design) DO_DESIGN=0 ;;
     --force)     FORCE=1 ;;
     --mode)      CAVEMAN_MODE_DEFAULT="${2:-ultra}"; shift ;;
     -h|--help)
       # Inline rather than sed-ing "$0": under `curl | bash` there is no script
       # file to read — $0 is just "bash".
       cat <<'USAGE'
-install — caveman (ultra) + robloxstudio-mcp across every agent found.
+install — caveman (ultra) + robloxstudio-mcp + design skills, across every
+agent found.
 
 Usage:
   bash install.sh              install everything detected
   bash install.sh --dry-run    print what would happen, change nothing
   bash install.sh --no-roblox  skip the Roblox Studio MCP server + skill
+  bash install.sh --no-design  skip the design/taste skill packs
   bash install.sh --mode full  caveman default mode (default: ultra)
   bash install.sh --force      reinstall even if already present
 USAGE
@@ -419,6 +426,37 @@ if [ "$DO_ROBLOX" = 1 ]; then
     warn "could not clone $RBX_SKILL_REPO — roblox-game skill skipped"
   fi
   rm -rf "$RGS_TMP"
+fi
+
+# -------------------------------------------------------------- design skills
+if [ "$DO_DESIGN" = 1 ]; then
+  say "== design skills =="
+  # These are ordinary `npx skills` repos, so `-a '*'` installs to every agent
+  # the skills CLI knows about (~59) in one shot — no per-profile loop needed
+  # like roblox-game requires. Everything still lands in ~/.agents/skills, the
+  # single shared tree, so Gemini sees one copy and reports no conflict.
+  #
+  # Two agents (Eve, PromptScript) reject global installs by design; their
+  # failure lines are expected and must not become warnings.
+  for repo in $DESIGN_SKILL_REPOS; do
+    if [ "$DRY_RUN" = 1 ]; then
+      info "\$ npx skills add $repo -a '*' -g"
+      continue
+    fi
+    DS_OUT=$(npx -y skills add "$repo" -a '*' -g --yes 2>&1 || true)
+    # "Installed N skills" is the success banner; count it rather than matching
+    # a skill name, since each repo ships a different set.
+    DS_N=$(printf '%s' "$DS_OUT" | grep -oE 'Installed [0-9]+ skill' | grep -oE '[0-9]+' | head -1)
+    if [ -n "$DS_N" ]; then
+      ok "$repo: $DS_N skills installed"
+    elif printf '%s' "$DS_OUT" | grep -q 'already installed'; then
+      skip "$repo: already installed"
+    else
+      warn "$repo: skill install failed"
+    fi
+  done
+else
+  skip "design skills skipped (--no-design)"
 fi
 
 # --------------------------------------------------------------- roblox MCP

@@ -1,12 +1,14 @@
 <#
 .SYNOPSIS
-  One-click install: caveman (ultra default) + robloxstudio-mcp across every agent.
+  One-click install: caveman (ultra default) + robloxstudio-mcp + design skills,
+  across every agent.
 
 .DESCRIPTION
   Installs caveman into every supported agent found on this machine (Claude Code,
-  opencode, Gemini CLI, Antigravity, Codex, Cursor, Copilot, ...), sets ultra as the
-  default compression mode, wires the Claude Code statusline badge, and registers the
-  Roblox Studio MCP server everywhere it is supported.
+  opencode, Gemini CLI, Antigravity, Cline, Codex, Cursor, Copilot, ...), sets ultra
+  as the default compression mode, wires the Claude Code statusline badge, registers
+  the Roblox Studio MCP server everywhere it is supported, and adds the design/taste
+  skill packs.
 
   Never aborts on a failed step: failures are collected and printed as a warning
   summary at the end. Requires PowerShell 5.1+ (7+ recommended).
@@ -15,12 +17,14 @@
   .\install.ps1
   .\install.ps1 -DryRun
   .\install.ps1 -NoRoblox -Mode full
+  .\install.ps1 -NoDesign
   .\install.ps1 -Force
 #>
 [CmdletBinding()]
 param(
   [switch]$DryRun,
   [switch]$NoRoblox,
+  [switch]$NoDesign,
   [switch]$Force,
   [ValidateSet('lite','full','ultra','wenyan','wenyan-lite','wenyan-full','wenyan-ultra')]
   [string]$Mode = 'ultra'
@@ -31,6 +35,9 @@ $RbxPkg      = '@chrrxs/robloxstudio-mcp'
 $RbxVersion  = '2.23.0'
 $RbxSkillRepo = 'https://github.com/brockmartin/roblox-game-skill'
 $RbxSkillSlug = 'brockmartin/roblox-game-skill'   # form the skills CLI expects
+# Design/taste skill packs. All are plain `npx skills` repos, so one command
+# each covers every agent — see the install loop for why -a '*' is enough.
+$DesignSkillRepos = @('emilkowalski/skills','Leonxlnx/taste-skill','pbakaus/impeccable')
 
 $script:Warnings = [System.Collections.ArrayList]::new()
 $script:Skipped  = [System.Collections.ArrayList]::new()
@@ -405,6 +412,32 @@ if (-not $NoRoblox) {
   }
   Remove-Item $rgsTmp -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+# -------------------------------------------------------------- design skills
+if (-not $NoDesign) {
+  Say '== design skills =='
+  # These are ordinary `npx skills` repos, so -a '*' installs to every agent the
+  # skills CLI knows about (~59) in one shot — no per-profile loop needed like
+  # roblox-game requires. Everything still lands in ~/.agents/skills, the single
+  # shared tree, so Gemini sees one copy and reports no conflict.
+  #
+  # Two agents (Eve, PromptScript) reject global installs by design; their
+  # failure lines are expected and must not become warnings.
+  foreach ($repo in $DesignSkillRepos) {
+    if ($DryRun) { Info "`$ npx skills add $repo -a '*' -g"; continue }
+    $dsOut = (& npx -y skills add $repo -a '*' -g --yes 2>&1 | Out-String)
+    # "Installed N skills" is the success banner; match it rather than a skill
+    # name, since each repo ships a different set.
+    $dsN = [regex]::Match($dsOut, 'Installed (\d+) skill')
+    if ($dsN.Success) {
+      Ok "${repo}: $($dsN.Groups[1].Value) skills installed"
+    } elseif ($dsOut -match 'already installed') {
+      Skip "${repo}: already installed"
+    } else {
+      Warn "${repo}: skill install failed"
+    }
+  }
+} else { Skip 'design skills skipped (-NoDesign)' }
 
 # --------------------------------------------------------------- roblox MCP
 if (-not $NoRoblox) {

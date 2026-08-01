@@ -13,12 +13,13 @@ irm https://raw.githubusercontent.com/rwhrsbh/agent-setup/main/install.ps1 | iex
 ```
 
 Sets up [caveman](https://github.com/JuliusBrussee/caveman) in ultra mode, the
-[Roblox Studio MCP server](https://github.com/Chrrxs/robloxstudio-mcp), and the
-[roblox-game skill](https://github.com/brockmartin/roblox-game-skill) — everywhere at once.
+[Roblox Studio MCP server](https://github.com/Chrrxs/robloxstudio-mcp), the
+[roblox-game skill](https://github.com/brockmartin/roblox-game-skill), and 22
+design/taste skills — everywhere at once.
 
 ## What you get
 
-| Agent | caveman | Badge | Roblox MCP | roblox-game |
+| Agent | caveman | Badge | Roblox MCP | Skills |
 |---|:---:|:---:|:---:|:---:|
 | Claude Code | ✅ | ✅ | ✅ | ✅ |
 | opencode | ✅ | — | ✅ | ✅ |
@@ -27,6 +28,14 @@ Sets up [caveman](https://github.com/JuliusBrussee/caveman) in ultra mode, the
 | Cline | ✅ | — | ✅ | ✅ |
 | Codex | ✅ | — | ✅ | ✅ |
 | Cursor · Windsurf · Trae · Copilot | ✅ | — | — | ✅ |
+| ~50 more the skills CLI knows | — | — | — | ✅ |
+
+**Skills** covers `roblox-game` plus three design packs — 22 skills in all:
+[emilkowalski/skills](https://github.com/emilkowalski/skills) (8: animation,
+Apple-style motion, UI polish), [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill)
+(13: anti-slop frontend, brand kits, image-to-code) and
+[pbakaus/impeccable](https://github.com/pbakaus/impeccable) (1: frontend design
+critique + live iteration). Skip them with `--no-design` / `-NoDesign`.
 
 Badge is Claude Code only — it's the one agent with a configurable statusline.
 opencode's TUI has no plugin-writable badge; Gemini, Antigravity, Cline and Codex
@@ -46,7 +55,8 @@ Ultra mode is the default. Change it with `--mode lite|full|ultra`.
 
 ```bash
 curl -fsSL .../install.sh | bash -s -- --dry-run     # show everything, change nothing
-curl -fsSL .../install.sh | bash -s -- --no-roblox   # caveman only
+curl -fsSL .../install.sh | bash -s -- --no-roblox   # skip Roblox MCP + skill
+curl -fsSL .../install.sh | bash -s -- --no-design   # skip the design skill packs
 curl -fsSL .../install.sh | bash -s -- --mode full   # lite · full · ultra · wenyan*
 curl -fsSL .../install.sh | bash -s -- --force       # reinstall
 ```
@@ -55,7 +65,7 @@ curl -fsSL .../install.sh | bash -s -- --force       # reinstall
 
 ```powershell
 irm https://raw.githubusercontent.com/rwhrsbh/agent-setup/main/install.ps1 -OutFile install.ps1
-.\install.ps1 -DryRun      # -NoRoblox · -Mode full · -Force
+.\install.ps1 -DryRun      # -NoRoblox · -NoDesign · -Mode full · -Force
 ```
 
 ## Good to know
