@@ -55,11 +55,14 @@ $TempDir = if ($env:TEMP) { $env:TEMP } else { [IO.Path]::GetTempPath() }
 
 # PS 5.1 has no ConvertFrom-Json -AsHashtable, so go through node for all JSON
 # merges. Node is a hard requirement anyway.
+# Returns 'ok' | 'fail' | 'dry'. Callers must not print "registered" on 'dry' —
+# nothing was written. Each caller prints its own dry-run line, since this
+# helper also backs the statusline merge, not just MCP configs.
 function Invoke-NodeJson {
   param([string]$Script, [string[]]$NodeArgs)
-  if ($DryRun) { return $true }
+  if ($DryRun) { return 'dry' }
   & node -e $Script @NodeArgs
-  return ($LASTEXITCODE -eq 0)
+  if ($LASTEXITCODE -eq 0) { return 'ok' } else { return 'fail' }
 }
 
 foreach ($p in @(
@@ -92,6 +95,8 @@ $GeminiDir = Join-Path $HomeDir '.gemini'
 # Nested Join-Path: the 3-argument form needs PowerShell 6+.
 $AntigravityMcp = Join-Path (Join-Path $GeminiDir 'config') 'mcp_config.json'
 $CodexDir = Join-Path $HomeDir '.codex'
+# Cline CLI keeps MCP config under its data dir (shared with the VS Code ext).
+$ClineMcp = Join-Path $HomeDir (Join-Path '.cline' (Join-Path 'data' (Join-Path 'settings' 'cline_mcp_settings.json')))
 
 # -------------------------------------------------------------------- caveman
 Say '== caveman =='
@@ -108,62 +113,97 @@ if ($cavemanPresent -and -not $Force) {
   }
 }
 
+# The caveman skills must exist in the shared ~/.agents/skills tree: that is
+# what Gemini reads (see the extension note below) and what codex/cursor/cline/
+# copilot share. `caveman --all` only writes there if one of those agents is
+# detected, and never with -g, so seed it explicitly when it is missing.
+$SharedSkills = (Join-Path (Join-Path $HomeDir '.agents') 'skills')
+if ((Test-Cmd gemini) -and -not (Test-Path (Join-Path $SharedSkills 'caveman'))) {
+  if ($DryRun) {
+    Info '$ npx skills add JuliusBrussee/caveman -a cline -g   # seeds ~/.agents/skills'
+  } else {
+    $cvSeed = (& npx -y skills add JuliusBrussee/caveman --skill '*' -a cline -g --yes 2>&1 | Out-String)
+    if ($cvSeed -match 'caveman') {
+      Ok 'caveman skills seeded into ~/.agents/skills'
+    } else { Warn 'could not seed caveman skills into ~/.agents/skills' }
+  }
+}
+
 # Gemini CLI < 0.2 has no `extensions` subcommand. It still exits 0 on
 # `extensions --help` (prints global help), so probe the output text instead.
+# Detection still matters: only newer versions can hold a stale extension.
 if (Test-Cmd gemini) {
   $gver = (& gemini --version 2>$null | Select-Object -First 1)
   $extHelp = (& gemini extensions --help 2>&1 | Out-String)
   $geminiHasExt = $extHelp -match 'extensions'
   if ($geminiHasExt) {
-    Ok "gemini $gver supports extensions"
+    Ok "gemini $gver detected"
   } else {
-    Warn "gemini $gver too old for 'extensions install' — falling back to GEMINI.md"
-    Info 'upgrade it yourself for the native path: npm i -g @google/gemini-cli'
+    Info "gemini $gver predates extensions — nothing to clean up"
   }
 
-  # Only fall back to GEMINI.md when the native extension path is unavailable.
-  if (-not $geminiHasExt) {
-    $gmd = (Join-Path $GeminiDir 'GEMINI.md')
-    if ((Test-Path $gmd) -and ((Get-Item $gmd).Length -gt 0) -and -not $Force) {
-      Skip 'GEMINI.md already has content, left alone'
-    } elseif ($DryRun) {
-      Info "`$ download caveman rule -> $gmd"
-    } else {
-      try {
-        New-Item -ItemType Directory -Force -Path $GeminiDir | Out-Null
-        $ruleUrl = 'https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/rules/caveman-activate.md'
-        Invoke-WebRequest -Uri $ruleUrl -OutFile $gmd -UseBasicParsing
-        Ok 'fallback GEMINI.md written'
-      } catch {
-        Warn 'could not fetch caveman rule for GEMINI.md fallback'
+  # Deliberately NOT installing the caveman gemini extension.
+  #
+  # Gemini scans its own extensions dir AND the shared ~/.agents/skills tree.
+  # Codex, Cursor, Cline and Copilot can only install into that shared tree, so
+  # an extension makes every skill collide — Gemini renames the commands
+  # (/caveman -> /caveman1) and shadows one copy. Verified: with the extension
+  # present alongside the shared copies, `gemini skills list` reports 7-8
+  # conflicts; with the shared tree alone it reports 0 and still discovers
+  # every skill. One copy serves Gemini and the other agents at once.
+  if ($geminiHasExt) {
+    $extList = (& gemini extensions list 2>&1 | Out-String)
+    if ($extList -match 'caveman') {
+      if ($DryRun) {
+        Info '$ gemini extensions uninstall caveman   # conflicts with ~/.agents/skills'
+      } else {
+        'y' | & gemini extensions uninstall caveman *> $null
+        Ok 'removed caveman gemini extension (conflicted with shared skills)'
       }
     }
+  }
+
+  # Gemini reads the shared skills, but nothing auto-activates caveman there —
+  # extensions carried that. ~/.gemini/GEMINI.md loads every session on every
+  # version, so the always-on rule goes there, importing the same shared copies
+  # rather than duplicating their text.
+  $gmd = (Join-Path $GeminiDir 'GEMINI.md')
+  $gmdHasOther = (Test-Path $gmd) -and ((Get-Item $gmd).Length -gt 0) -and
+                 -not ((Get-Content $gmd -Raw -ErrorAction SilentlyContinue) -match 'caveman')
+  if ($DryRun) {
+    Info "`$ write $gmd (caveman always-on, mode $Mode)"
+  } elseif ($gmdHasOther -and -not $Force) {
+    Skip 'GEMINI.md has unrelated content, left alone'
   } else {
-    # Native path: install the caveman extension.
-    $extList = (& gemini extensions list 2>&1 | Out-String)
-    if (($extList -match 'caveman') -and -not $Force) {
-      Skip 'gemini: caveman extension already installed'
-    } elseif ($DryRun) {
-      Info '$ gemini extensions install https://github.com/JuliusBrussee/caveman'
-    } else {
-      # "already installed" counts as success: agy's `plugin import` can restore
-      # the extension before this step runs, so the install legitimately no-ops.
-      $out = ('y' | & gemini extensions install https://github.com/JuliusBrussee/caveman 2>&1 | Out-String)
-      if ($out -match 'installed successfully|already installed') {
-        Ok 'gemini caveman extension installed'
-        Info 'cavecrew subagents fail to load on gemini (Claude tool names) — harmless'
-        # The caveman --all installer also drops these into the shared
-        # ~/.agents/skills tree via `npx skills`. Gemini scans both that tree
-        # and its own extensions, so leaving them duplicated renames every
-        # command (/caveman -> /caveman1). The extension is the better copy:
-        # agy imports from it and `gemini extensions update` maintains it.
-        foreach ($s in @('caveman','cavecrew','caveman-commit','caveman-compress',
-                         'caveman-help','caveman-review','caveman-stats')) {
-          $dup = (Join-Path (Join-Path (Join-Path $HomeDir '.agents') 'skills') $s)
-          if (Test-Path $dup) { Remove-Item $dup -Recurse -Force -ErrorAction SilentlyContinue }
-        }
-        Ok 'removed duplicate caveman skills from ~/.agents/skills'
-      } else { Warn 'gemini extension install failed' }
+    try {
+      New-Item -ItemType Directory -Force -Path $GeminiDir | Out-Null
+      $gmdBody = @"
+@~/.agents/skills/caveman/SKILL.md
+@~/.agents/skills/caveman-commit/SKILL.md
+@~/.agents/skills/caveman-review/SKILL.md
+@~/.agents/skills/caveman-compress/SKILL.md
+
+Respond terse like smart caveman. All technical substance stay. Only fluff die.
+
+Default intensity: **$Mode**. Persist every response until user says "stop caveman" or "normal mode".
+
+Rules:
+- Drop: articles (a/an/the), filler (just/really/basically), pleasantries, hedging
+- Fragments OK. Short synonyms. Technical terms exact. Code unchanged.
+- Pattern: [thing] [action] [reason]. [next step].
+- Not: "Sure! I'd be happy to help you with that."
+- Yes: "Bug in auth middleware. Fix:"
+
+Switch level: /caveman lite|full|ultra|wenyan
+
+Auto-Clarity: drop caveman for security warnings, irreversible actions, user confused. Resume after.
+
+Boundaries: code/commits/PRs written normal.
+"@
+      Set-Content -Path $gmd -Value $gmdBody -Encoding UTF8
+      Ok "~/.gemini/GEMINI.md written (caveman always-on, $Mode)"
+    } catch {
+      Warn "could not write $gmd"
     }
   }
 } else {
@@ -178,7 +218,7 @@ if (Test-Cmd agy) {
   Skip 'antigravity CLI not found — install it from https://antigravity.google/docs/cli/install'
 }
 
-Info 'agy imports its plugins after the gemini extensions are in place (below)'
+Info 'agy imports its plugins from the caveman plugin dir (below)'
 
 # --------------------------------------------------------------- default mode
 Say "== caveman default mode: $Mode =="
@@ -234,10 +274,10 @@ if(fs.existsSync(file)){
 cfg.statusLine={type:"command",command:cmd};
 fs.writeFileSync(file,JSON.stringify(cfg,null,2)+"\n");
 '@
-    if (Invoke-NodeJson -Script $js -NodeArgs @((Join-Path $ClaudeDir 'settings.json'), $cmd)) {
-      Ok "claude code badge wired [CAVEMAN:$($Mode.ToUpper())]"
-    } else {
-      Warn 'failed writing statusLine into settings.json'
+    switch (Invoke-NodeJson -Script $js -NodeArgs @((Join-Path $ClaudeDir 'settings.json'), $cmd)) {
+      'ok'   { Ok "claude code badge wired [CAVEMAN:$($Mode.ToUpper())]" }
+      'dry'  { Info "`$ write statusLine into $(Join-Path $ClaudeDir 'settings.json')" }
+      'fail' { Warn 'failed writing statusLine into settings.json' }
     }
   } else {
     Warn 'statusline script not found in plugin cache — badge not wired'
@@ -257,7 +297,7 @@ if (-not $NoRoblox) {
   $rgsTmp = Join-Path $TempDir ("roblox-game-skill-" + [guid]::NewGuid().ToString('N').Substring(0,8))
   if ($DryRun) {
     Info "`$ git clone --depth 1 $RbxSkillRepo"
-    Info '$ install into claude/opencode skills dirs + gemini/agy extensions'
+    Info '$ install into claude/opencode skills dirs + shared ~/.agents/skills'
   } elseif (-not (Test-Cmd git)) {
     Warn 'git not found — roblox-game skill skipped'
   } else {
@@ -286,85 +326,75 @@ if (-not $NoRoblox) {
         }
       }
 
-      # --- gemini + agy: extension layout (manifest + skills/ subdir)
+      # --- gemini: no extension, same reason as caveman above. Gemini picks the
+      # skill up from ~/.agents/skills, which the profile loop below fills.
       if ((Test-Cmd gemini) -and $geminiHasExt) {
-        $stage = Join-Path $rgsTmp 'ext'
-        $stageSkill = Join-Path $stage (Join-Path 'skills' 'roblox-game')
-        New-Item -ItemType Directory -Force -Path $stageSkill | Out-Null
-        foreach ($item in @('SKILL.md','references','workflows','templates')) {
-          Copy-Item (Join-Path $src $item) -Destination $stageSkill -Recurse -Force
-        }
-        Copy-Item (Join-Path $src 'SKILL.md') -Destination (Join-Path $stage 'GEMINI.md') -Force
-        @'
-{
-  "name": "roblox-game",
-  "description": "Expert Roblox game development companion — Luau, Roblox Studio, MCP integration, simulator, tycoon, obby, RPG, horror, battle royale, game design, security, performance.",
-  "version": "1.0.0",
-  "contextFileName": "GEMINI.md"
-}
-'@ | Set-Content (Join-Path $stage 'gemini-extension.json') -Encoding UTF8
-
         $extList2 = (& gemini extensions list 2>&1 | Out-String)
-        if (($extList2 -match 'roblox-game') -and -not $Force) {
-          Skip 'gemini: roblox-game already installed'
-        } else {
-          'y' | & gemini extensions uninstall roblox-game *> $null
-          $rgsOut = ('y' | & gemini extensions install $stage 2>&1 | Out-String)
-          if ($rgsOut -match 'installed successfully|already installed') {
-            Ok 'gemini: roblox-game extension installed'
-          } else { Warn 'gemini: roblox-game extension install failed' }
+        if ($extList2 -match 'roblox-game') {
+          if ($DryRun) {
+            Info '$ gemini extensions uninstall roblox-game   # conflicts with ~/.agents/skills'
+          } else {
+            'y' | & gemini extensions uninstall roblox-game *> $null
+            Ok 'removed roblox-game gemini extension (conflicted with shared skills)'
+          }
         }
       }
 
-      # Single agy import, now that caveman AND roblox-game extensions both
-      # exist. --force so a re-run refreshes the staged copies.
+      # agy used to import from the gemini extensions; those are gone now, so
+      # import straight from the plugin directory. `agy plugin import` takes a
+      # path as well as the `gemini`/`claude` keywords. --force refreshes a
+      # previous import. roblox-game is a bare skill dir, not a plugin — agy
+      # reads it from the shared tree the profile loop fills.
       if (Test-Cmd agy) {
-        $agyOut = (& agy plugin import gemini --force 2>&1 | Out-String)
-        $agyGot = @()
-        if ($agyOut -match 'caveman')     { $agyGot += 'caveman' }
-        if ($agyOut -match 'roblox-game') { $agyGot += 'roblox-game' }
-        if ($agyGot.Count -gt 0) {
-          Ok "antigravity imported: $($agyGot -join ' + ')"
-        } else { Warn 'agy plugin import gemini imported nothing' }
-        Info 'agy needs Google OAuth on first run: agy'
+        $cvPlug = Get-ChildItem -Directory -ErrorAction SilentlyContinue `
+          (Join-Path $ClaudeDir (Join-Path 'plugins' (Join-Path 'cache' (Join-Path 'caveman' 'caveman')))) |
+          Select-Object -First 1
+        if ($cvPlug) {
+          if ($DryRun) {
+            Info "`$ agy plugin import $($cvPlug.FullName) --force"
+          } else {
+            $agyOut = (& agy plugin import $cvPlug.FullName --force 2>&1 | Out-String)
+            if ($agyOut -match 'caveman') {
+              Ok 'antigravity imported: caveman'
+            } else { Warn 'agy plugin import found nothing to import' }
+            Info 'agy needs Google OAuth on first run: agy'
+          }
+        }
       }
 
       # --- Codex and the other `npx skills` agents.
       # Same mechanism caveman uses for them: the upstream skills CLI writes
       # into each agent's own profile. -g installs user-wide, not into $PWD.
       #
-      # Catch: codex, cursor, cline and copilot all land in the shared
-      # ~/.agents/skills tree, which Gemini CLI also scans. Installing there
-      # while the gemini extension exists makes Gemini report a skill conflict
-      # and override one copy with the other. Those profiles are skipped when
-      # the extension already provides the skill. windsurf and trae write to
-      # their own directories and are always safe.
+      # codex, cursor, cline and copilot all resolve to the shared
+      # ~/.agents/skills tree — one install covers all of them, and Gemini
+      # reads that tree too. windsurf and trae keep their own directories.
+      #
+      # Gemini alone would leave the shared tree empty (it installs nothing
+      # itself), so seed it via the cline profile when gemini is present but
+      # none of the shared-tree agents are.
       $sharedSkillsDir = Join-Path (Join-Path $HomeDir '.agents') 'skills'
-      $gemHasRgs = Test-Path (Join-Path (Join-Path $GeminiDir 'extensions') 'roblox-game')
-      if ($gemHasRgs) {
-        $dupRgs = Join-Path $sharedSkillsDir 'roblox-game'
-        if ((Test-Path $dupRgs) -and -not $DryRun) {
-          # Clear a duplicate left by an earlier run, otherwise Gemini keeps
-          # reporting the conflict.
-          Remove-Item $dupRgs -Recurse -Force -ErrorAction SilentlyContinue
-          Ok 'removed duplicate roblox-game from ~/.agents/skills'
+      if ((Test-Cmd gemini) -and -not (Test-Path (Join-Path $sharedSkillsDir 'roblox-game'))) {
+        if ($DryRun) {
+          Info "`$ npx skills add $RbxSkillSlug -a cline -g   # seeds ~/.agents/skills for gemini"
+        } else {
+          $seedOut = (& npx -y skills add $RbxSkillSlug --skill '*' -a cline -g --yes 2>&1 | Out-String)
+          if ($seedOut -match 'roblox-game') {
+            Ok 'gemini: roblox-game skill installed (~/.agents/skills)'
+          } else { Warn 'gemini: could not seed roblox-game into ~/.agents/skills' }
         }
       }
 
       $npxProfiles = @(
-        @{ id = 'codex';          shared = $true;  test = { Test-Cmd codex } },
-        @{ id = 'cursor';         shared = $true;  test = { Test-Path (Join-Path $HomeDir '.cursor') } },
-        @{ id = 'windsurf';       shared = $false; test = { Test-Path (Join-Path (Join-Path $HomeDir '.codeium') 'windsurf') } },
-        @{ id = 'cline';          shared = $true;  test = { Test-Path (Join-Path $HomeDir '.clinerules') } },
-        @{ id = 'github-copilot'; shared = $true;  test = { (Test-Path (Join-Path $HomeDir '.copilot')) -or (Test-Path (Join-Path (Join-Path $HomeDir '.config') 'github-copilot')) } },
-        @{ id = 'trae';           shared = $false; test = { Test-Path (Join-Path $HomeDir '.trae') } }
+        @{ id = 'codex';          test = { Test-Cmd codex } },
+        @{ id = 'cursor';         test = { Test-Path (Join-Path $HomeDir '.cursor') } },
+        @{ id = 'windsurf';       test = { Test-Path (Join-Path (Join-Path $HomeDir '.codeium') 'windsurf') } },
+        @{ id = 'cline';          test = { (Test-Path (Join-Path $HomeDir '.clinerules')) -or (Test-Path (Join-Path $HomeDir '.cline')) } },
+        @{ id = 'github-copilot'; test = { (Test-Path (Join-Path $HomeDir '.copilot')) -or (Test-Path (Join-Path (Join-Path $HomeDir '.config') 'github-copilot')) } },
+        @{ id = 'trae';           test = { Test-Path (Join-Path $HomeDir '.trae') } }
       )
       foreach ($p in $npxProfiles) {
         if (-not (& $p.test)) { continue }
-        if ($p.shared -and $gemHasRgs) {
-          Skip "$($p.id): uses ~/.agents/skills, already covered by the gemini extension"
-          continue
-        }
         if ($DryRun) { Info "`$ npx skills add $RbxSkillSlug -a $($p.id) -g"; continue }
         $skOut = (& npx -y skills add $RbxSkillSlug --skill '*' -a $p.id -g --yes 2>&1 | Out-String)
         if ($skOut -match 'roblox-game') {
@@ -394,9 +424,12 @@ if(fs.existsSync(file)){
 fs.mkdirSync(path.dirname(file),{recursive:true});
 if(schema && !cfg["$schema"]) cfg["$schema"]=schema;
 cfg[key]=cfg[key]||{};
-cfg[key].robloxstudio = shape==="opencode"
-  ? {type:"local",command:["npx","-y",pkg+"@"+ver,"--auto-install-plugin"],enabled:true}
-  : {command:"npx",args:["-y",pkg+"@"+ver,"--auto-install-plugin"]};
+const args=["-y",pkg+"@"+ver,"--auto-install-plugin"];
+cfg[key].robloxstudio =
+  shape==="opencode" ? {type:"local",command:["npx",...args],enabled:true}
+// Cline nests the transport instead of keeping command/args at top level.
+: shape==="cline"    ? {transport:{type:"stdio",command:"npx",args}}
+:                      {command:"npx",args};
 fs.writeFileSync(file,JSON.stringify(cfg,null,2)+"\n");
 '@
 
@@ -416,25 +449,58 @@ fs.writeFileSync(file,JSON.stringify(cfg,null,2)+"\n");
 
   # --- opencode
   if (Test-Path $OpencodeDir) {
-    if (Invoke-NodeJson -Script $mergeJs -NodeArgs @((Join-Path $OpencodeDir 'opencode.json'),'mcp','https://opencode.ai/config.json','opencode',$RbxPkg,$RbxVersion)) {
-      Ok 'opencode MCP registered'
-    } else { Warn 'opencode MCP merge failed' }
+    switch (Invoke-NodeJson -Script $mergeJs -NodeArgs @((Join-Path $OpencodeDir 'opencode.json'),'mcp','https://opencode.ai/config.json','opencode',$RbxPkg,$RbxVersion)) {
+      'ok'   { Ok 'opencode MCP registered' }
+      'dry'  { Info "`$ merge robloxstudio into $(Join-Path $OpencodeDir 'opencode.json')" }
+      'fail' { Warn 'opencode MCP merge failed' }
+    }
   } else { Skip 'opencode not found' }
 
   # --- Gemini CLI
   if (Test-Cmd gemini) {
-    if (Invoke-NodeJson -Script $mergeJs -NodeArgs @((Join-Path $GeminiDir 'settings.json'),'mcpServers','','standard',$RbxPkg,$RbxVersion)) {
-      Ok 'gemini CLI MCP registered'
-    } else { Warn 'gemini settings.json merge failed' }
+    switch (Invoke-NodeJson -Script $mergeJs -NodeArgs @((Join-Path $GeminiDir 'settings.json'),'mcpServers','','standard',$RbxPkg,$RbxVersion)) {
+      'ok'   { Ok 'gemini CLI MCP registered' }
+      'dry'  { Info "`$ merge robloxstudio into $(Join-Path $GeminiDir 'settings.json')" }
+      'fail' { Warn 'gemini settings.json merge failed' }
+    }
   } else { Skip 'gemini CLI not found' }
 
   # --- Antigravity (IDE + CLI share ~/.gemini/config/mcp_config.json)
   if ((Test-Path (Join-Path $HomeDir '.antigravity')) -or (Test-Cmd agy) -or (Test-Cmd antigravity)) {
-    if (Invoke-NodeJson -Script $mergeJs -NodeArgs @($AntigravityMcp,'mcpServers','','standard',$RbxPkg,$RbxVersion)) {
-      Ok "antigravity MCP registered ($AntigravityMcp)"
-      Info 'restart Antigravity, then Manage MCP Servers to verify'
-    } else { Warn 'antigravity mcp_config.json merge failed' }
+    switch (Invoke-NodeJson -Script $mergeJs -NodeArgs @($AntigravityMcp,'mcpServers','','standard',$RbxPkg,$RbxVersion)) {
+      'ok'   { Ok "antigravity MCP registered ($AntigravityMcp)"
+               Info 'restart Antigravity, then Manage MCP Servers to verify' }
+      'dry'  { Info "`$ merge robloxstudio into $AntigravityMcp" }
+      'fail' { Warn 'antigravity mcp_config.json merge failed' }
+    }
   } else { Skip 'antigravity not found' }
+
+  # --- Cline CLI
+  # `cline mcp install --yes` writes the config itself, which beats guessing
+  # the schema — the CLI nests the transport where every other agent keeps
+  # command/args flat. Fall back to a direct merge if the CLI is absent (the
+  # VS Code extension reads the same file).
+  if (Test-Cmd cline) {
+    $clineHas = (Test-Path $ClineMcp) -and
+                ((Get-Content $ClineMcp -Raw -ErrorAction SilentlyContinue) -match '"robloxstudio"')
+    if ($clineHas -and -not $Force) {
+      Skip 'cline: robloxstudio already registered'
+    } elseif ($DryRun) {
+      Info "`$ cline mcp install robloxstudio --yes -- npx -y $RbxPkg@$RbxVersion"
+    } else {
+      $clineOut = (& cline mcp install robloxstudio --transport stdio --yes -- `
+        npx -y "$RbxPkg@$RbxVersion" --auto-install-plugin 2>&1 | Out-String)
+      if ($clineOut -match 'nstalled') {
+        Ok 'cline MCP registered'
+      } else { Warn 'cline mcp install failed' }
+    }
+  } elseif (Test-Path (Join-Path $HomeDir '.cline')) {
+    switch (Invoke-NodeJson -Script $mergeJs -NodeArgs @($ClineMcp,'mcpServers','','cline',$RbxPkg,$RbxVersion)) {
+      'ok'   { Ok 'cline MCP registered (config merge)' }
+      'dry'  { Info "`$ merge robloxstudio into $ClineMcp" }
+      'fail' { Warn 'cline mcp settings merge failed' }
+    }
+  } else { Skip 'cline not found' }
 
   # --- Codex (TOML, not JSON)
   if ((Test-Cmd codex) -or (Test-Path $CodexDir)) {

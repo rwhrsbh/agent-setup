@@ -97,6 +97,8 @@ GEMINI_DIR="$HOME/.gemini"
 # Antigravity IDE + CLI share this central MCP config.
 ANTIGRAVITY_MCP="$HOME/.gemini/config/mcp_config.json"
 CODEX_DIR="$HOME/.codex"
+# Cline CLI keeps MCP config under its data dir (shared with the VS Code ext).
+CLINE_MCP="$HOME/.cline/data/settings/cline_mcp_settings.json"
 
 # ------------------------------------------------------------------ caveman
 say "== caveman =="
@@ -114,8 +116,25 @@ else
   fi
 fi
 
-# Gemini CLI < 0.2 has no `extensions` subcommand, so caveman's gemini step
-# fails there. GEMINI.md is read by every version, so use it as a fallback.
+# The caveman skills must exist in the shared ~/.agents/skills tree: that is
+# what Gemini reads (see the extension note below) and what codex/cursor/cline/
+# copilot share. `caveman --all` only writes there if one of those agents is
+# detected, and never with -g, so seed it explicitly when it is missing.
+if command -v gemini >/dev/null 2>&1 && [ ! -d "$HOME/.agents/skills/caveman" ]; then
+  if [ "$DRY_RUN" = 1 ]; then
+    info "\$ npx skills add JuliusBrussee/caveman -a cline -g   # seeds ~/.agents/skills"
+  else
+    CVSEED=$(npx -y skills add JuliusBrussee/caveman --skill '*' -a cline -g --yes 2>&1 || true)
+    if printf '%s' "$CVSEED" | grep -q 'caveman'; then
+      ok "caveman skills seeded into ~/.agents/skills"
+    else
+      warn "could not seed caveman skills into ~/.agents/skills"
+    fi
+  fi
+fi
+
+# Gemini CLI < 0.2 has no `extensions` subcommand. Detection still matters:
+# only newer versions can have a stale caveman extension to remove.
 if command -v gemini >/dev/null 2>&1; then
   GEMINI_VER=$(gemini --version 2>/dev/null | head -1)
   # Old gemini (<0.2) exits 0 on `extensions --help` but just prints the global
@@ -128,63 +147,69 @@ if command -v gemini >/dev/null 2>&1; then
     GEMINI_HAS_EXT=0
   fi
   if [ "$GEMINI_HAS_EXT" = 1 ]; then
-    ok "gemini $GEMINI_VER supports extensions"
+    ok "gemini $GEMINI_VER detected"
   else
-    warn "gemini $GEMINI_VER too old for 'extensions install' — falling back to GEMINI.md"
-    info "upgrade it yourself for the native path: npm i -g @google/gemini-cli"
+    info "gemini $GEMINI_VER predates extensions — nothing to clean up"
   fi
-  if [ "$GEMINI_HAS_EXT" = 0 ]; then
-    if [ -s "$GEMINI_DIR/GEMINI.md" ] && [ "$FORCE" = 0 ]; then
-      skip "GEMINI.md already has content, left alone"
-    else
-      RULE_URL="https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/rules/caveman-activate.md"
+  # Deliberately NOT installing the caveman gemini extension.
+  #
+  # Gemini scans its own extensions dir AND the shared ~/.agents/skills tree.
+  # Codex, Cursor, Cline and Copilot can only install into that shared tree, so
+  # an extension makes every skill collide — Gemini renames the commands
+  # (/caveman -> /caveman1) and shadows one copy. Verified: with the extension
+  # present alongside the shared copies, `gemini skills list` reports 7-8
+  # conflicts; with the shared tree alone it reports 0 and still discovers
+  # every skill. One copy in ~/.agents/skills serves Gemini and the other
+  # agents at once, so that is where caveman lives.
+  if [ "$GEMINI_HAS_EXT" = 1 ]; then
+    GEM_LIST=$(gemini extensions list 2>/dev/null || true)
+    if printf "%s" "$GEM_LIST" | grep -q caveman; then
       if [ "$DRY_RUN" = 1 ]; then
-        info "\$ curl $RULE_URL -o $GEMINI_DIR/GEMINI.md"
+        info "\$ gemini extensions uninstall caveman   # conflicts with ~/.agents/skills"
       else
-        mkdir -p "$GEMINI_DIR"
-        if curl -fsSL "$RULE_URL" -o "$GEMINI_DIR/GEMINI.md.tmp" 2>/dev/null; then
-          mv "$GEMINI_DIR/GEMINI.md.tmp" "$GEMINI_DIR/GEMINI.md"
-          ok "fallback ~/.gemini/GEMINI.md written"
-        else
-          rm -f "$GEMINI_DIR/GEMINI.md.tmp"
-          warn "could not fetch caveman rule for GEMINI.md fallback"
-        fi
+        yes 2>/dev/null | gemini extensions uninstall caveman >/dev/null 2>&1 || true
+        ok "removed caveman gemini extension (conflicted with shared skills)"
       fi
     fi
   fi
-  # Native gemini install path (works once extensions exist).
-  if [ "$GEMINI_HAS_EXT" = 1 ]; then
-    GEM_LIST=$(gemini extensions list 2>/dev/null || true)
-    if printf "%s" "$GEM_LIST" | grep -q caveman && [ "$FORCE" = 0 ]; then
-      skip "gemini: caveman extension already installed"
-    elif [ "$DRY_RUN" = 1 ]; then
-      info "\$ gemini extensions install https://github.com/JuliusBrussee/caveman"
+
+  # Gemini reads the shared skills, but nothing auto-activates caveman there —
+  # extensions carried that. ~/.gemini/GEMINI.md is loaded every session on
+  # every version, so the always-on rule goes there, importing the same shared
+  # copies rather than duplicating their text.
+  if [ "$DRY_RUN" = 1 ]; then
+    info "\$ write $GEMINI_DIR/GEMINI.md (caveman always-on, mode $CAVEMAN_MODE_DEFAULT)"
+  elif [ -s "$GEMINI_DIR/GEMINI.md" ] && ! grep -q 'caveman' "$GEMINI_DIR/GEMINI.md" 2>/dev/null && [ "$FORCE" = 0 ]; then
+    skip "GEMINI.md has unrelated content, left alone"
+  else
+    mkdir -p "$GEMINI_DIR"
+    if cat > "$GEMINI_DIR/GEMINI.md" <<GEMMD
+@~/.agents/skills/caveman/SKILL.md
+@~/.agents/skills/caveman-commit/SKILL.md
+@~/.agents/skills/caveman-review/SKILL.md
+@~/.agents/skills/caveman-compress/SKILL.md
+
+Respond terse like smart caveman. All technical substance stay. Only fluff die.
+
+Default intensity: **$CAVEMAN_MODE_DEFAULT**. Persist every response until user says "stop caveman" or "normal mode".
+
+Rules:
+- Drop: articles (a/an/the), filler (just/really/basically), pleasantries, hedging
+- Fragments OK. Short synonyms. Technical terms exact. Code unchanged.
+- Pattern: [thing] [action] [reason]. [next step].
+- Not: "Sure! I'd be happy to help you with that."
+- Yes: "Bug in auth middleware. Fix:"
+
+Switch level: /caveman lite|full|ultra|wenyan
+
+Auto-Clarity: drop caveman for security warnings, irreversible actions, user confused. Resume after.
+
+Boundaries: code/commits/PRs written normal.
+GEMMD
+    then
+      ok "~/.gemini/GEMINI.md written (caveman always-on, $CAVEMAN_MODE_DEFAULT)"
     else
-      # Installer prompts for confirmation; feed it 'y'. "already installed" is
-      # a success for our purposes: agy's `plugin import` can restore the
-      # extension before this step runs, so the install legitimately no-ops.
-      #
-      # Capture first, grep after: `yes | cmd | grep -q` dies to SIGPIPE once
-      # grep exits early, and pipefail then reports the whole pipeline as
-      # failed even though the match succeeded.
-      GEM_OUT=$(yes 2>/dev/null | gemini extensions install \
-        https://github.com/JuliusBrussee/caveman 2>&1 || true)
-      if printf '%s' "$GEM_OUT" | grep -qE 'installed successfully|already installed'; then
-        ok "gemini caveman extension installed"
-        info "cavecrew subagents fail to load on gemini (Claude tool names) — harmless"
-        # The caveman --all installer also drops these into the shared
-        # ~/.agents/skills tree via `npx skills`. Gemini scans both that tree
-        # and its own extensions, so leaving them duplicated renames every
-        # command (/caveman -> /caveman1). The extension is the better copy:
-        # agy imports from it and `gemini extensions update` maintains it.
-        for s in caveman cavecrew caveman-commit caveman-compress \
-                 caveman-help caveman-review caveman-stats; do
-          [ -d "$HOME/.agents/skills/$s" ] && rm -rf "$HOME/.agents/skills/$s"
-        done
-        ok "removed duplicate caveman skills from ~/.agents/skills"
-      else
-        warn "gemini extension install failed"
-      fi
+      warn "could not write $GEMINI_DIR/GEMINI.md"
     fi
   fi
 else
@@ -199,7 +224,7 @@ else
   skip "antigravity CLI not found — install it from https://antigravity.google/docs/cli/install"
 fi
 
-info "agy imports its plugins after the gemini extensions are in place (below)"
+info "agy imports its plugins from the caveman plugin dir (below)"
 
 # --------------------------------------------------------------- default mode
 say "== caveman default mode: $CAVEMAN_MODE_DEFAULT =="
@@ -282,7 +307,7 @@ if [ "$DO_ROBLOX" = 1 ]; then
   RGS_TMP="$(mktemp -d -t roblox-game-skill.XXXXXX)"
   if [ "$DRY_RUN" = 1 ]; then
     info "\$ git clone --depth 1 $RBX_SKILL_REPO"
-    info "\$ install into claude/opencode skills dirs + gemini/agy extensions"
+    info "\$ install into claude/opencode skills dirs + shared ~/.agents/skills"
   elif git clone --depth 1 "$RBX_SKILL_REPO" "$RGS_TMP/src" >/dev/null 2>&1; then
     SRC="$RGS_TMP/src"
 
@@ -304,88 +329,80 @@ if [ "$DO_ROBLOX" = 1 ]; then
       fi
     done
 
-    # --- gemini + agy: extension layout (manifest + skills/ subdir)
+    # --- gemini: no extension, same reason as caveman above. Gemini picks the
+    # skill up from ~/.agents/skills, which the profile loop below fills.
     if command -v gemini >/dev/null 2>&1 && [ "${GEMINI_HAS_EXT:-0}" = 1 ]; then
-      STAGE="$RGS_TMP/ext"
-      mkdir -p "$STAGE/skills/roblox-game"
-      cp -R "$SRC/SKILL.md" "$SRC/references" "$SRC/workflows" "$SRC/templates" \
-        "$STAGE/skills/roblox-game/" 2>/dev/null
-      cp "$SRC/SKILL.md" "$STAGE/GEMINI.md" 2>/dev/null
-      cat > "$STAGE/gemini-extension.json" <<'MANIFEST'
-{
-  "name": "roblox-game",
-  "description": "Expert Roblox game development companion — Luau, Roblox Studio, MCP integration, simulator, tycoon, obby, RPG, horror, battle royale, game design, security, performance.",
-  "version": "1.0.0",
-  "contextFileName": "GEMINI.md"
-}
-MANIFEST
       GEM_LIST2=$(gemini extensions list 2>/dev/null || true)
-      if printf "%s" "$GEM_LIST2" | grep -q roblox-game && [ "$FORCE" = 0 ]; then
-        skip "gemini: roblox-game already installed"
-      else
-        yes 2>/dev/null | gemini extensions uninstall roblox-game >/dev/null 2>&1 || true
-        # Same SIGPIPE/pipefail trap as above: capture, then match.
-        RGS_OUT=$(yes 2>/dev/null | gemini extensions install "$STAGE" 2>&1 || true)
-        if printf '%s' "$RGS_OUT" | grep -qE 'installed successfully|already installed'; then
-          ok "gemini: roblox-game extension installed"
+      if printf "%s" "$GEM_LIST2" | grep -q roblox-game; then
+        if [ "$DRY_RUN" = 1 ]; then
+          info "\$ gemini extensions uninstall roblox-game   # conflicts with ~/.agents/skills"
         else
-          warn "gemini: roblox-game extension install failed"
+          yes 2>/dev/null | gemini extensions uninstall roblox-game >/dev/null 2>&1 || true
+          ok "removed roblox-game gemini extension (conflicted with shared skills)"
         fi
       fi
-
     fi
 
-    # Single agy import, now that caveman AND roblox-game extensions both
-    # exist. --force so a re-run refreshes the staged copies.
+    # agy used to import from the gemini extensions; those are gone now, so
+    # import straight from the plugin directories. `agy plugin import` takes a
+    # path as well as the `gemini`/`claude` keywords. --force refreshes a
+    # previous import.
     if command -v agy >/dev/null 2>&1; then
-      AGY_OUT=$(agy plugin import gemini --force 2>&1)
       AGY_GOT=""
-      echo "$AGY_OUT" | grep -q 'caveman'     && AGY_GOT="caveman"
-      echo "$AGY_OUT" | grep -q 'roblox-game' && AGY_GOT="${AGY_GOT:+$AGY_GOT + }roblox-game"
-      if [ -n "$AGY_GOT" ]; then
-        ok "antigravity imported: $AGY_GOT"
-      else
-        warn "agy plugin import gemini imported nothing"
+      CVPLUG=$(ls -d "$CLAUDE_DIR"/plugins/cache/caveman/caveman/*/ 2>/dev/null | head -1)
+      if [ -n "$CVPLUG" ]; then
+        if [ "$DRY_RUN" = 1 ]; then
+          info "\$ agy plugin import $CVPLUG --force"
+        else
+          AGY_OUT=$(agy plugin import "$CVPLUG" --force 2>&1 || true)
+          printf '%s' "$AGY_OUT" | grep -q 'caveman' && AGY_GOT="caveman"
+        fi
       fi
-      info "agy needs Google OAuth on first run: agy"
+      # roblox-game is a bare skill dir, not a plugin — agy reads skills from
+      # the shared tree the profile loop above fills.
+      if [ "$DRY_RUN" = 0 ]; then
+        if [ -n "$AGY_GOT" ]; then
+          ok "antigravity imported: $AGY_GOT"
+        else
+          warn "agy plugin import found nothing to import"
+        fi
+        info "agy needs Google OAuth on first run: agy"
+      fi
     fi
 
     # --- Codex and the other `npx skills` agents.
     # Same mechanism caveman uses for them: the upstream skills CLI writes into
     # each agent's own profile. -g installs user-wide instead of into $PWD.
     #
-    # Catch: codex, cursor, cline and copilot all land in the shared
-    # ~/.agents/skills tree, which Gemini CLI also scans. Installing there while
-    # the gemini extension exists makes Gemini report a skill conflict and
-    # override one copy with the other. So those profiles are skipped whenever
-    # the extension is already providing the skill. windsurf and trae write to
-    # their own directories and are always safe.
-    GEM_HAS_RGS=0
-    if [ -d "$GEMINI_DIR/extensions/roblox-game" ]; then
-      GEM_HAS_RGS=1
-      # Clear a duplicate left by an earlier run, otherwise Gemini keeps
-      # reporting the conflict.
-      if [ -d "$HOME/.agents/skills/roblox-game" ] && [ "$DRY_RUN" = 0 ]; then
-        rm -rf "$HOME/.agents/skills/roblox-game"
-        ok "removed duplicate roblox-game from ~/.agents/skills"
+    # codex, cursor, cline and copilot all resolve to the shared
+    # ~/.agents/skills tree — one install covers all of them, and Gemini reads
+    # that tree too. windsurf and trae keep their own directories.
+    #
+    # Gemini alone would leave the shared tree empty (it installs nothing
+    # itself), so seed it via the cline profile when gemini is present but none
+    # of the shared-tree agents are.
+    if command -v gemini >/dev/null 2>&1 && [ ! -d "$HOME/.agents/skills/roblox-game" ]; then
+      if [ "$DRY_RUN" = 1 ]; then
+        info "\$ npx skills add $RBX_SKILL_SLUG -a cline -g   # seeds ~/.agents/skills for gemini"
+      else
+        SEED_OUT=$(npx -y skills add "$RBX_SKILL_SLUG" --skill '*' -a cline -g --yes 2>&1 || true)
+        if printf '%s' "$SEED_OUT" | grep -q 'roblox-game'; then
+          ok "gemini: roblox-game skill installed (~/.agents/skills)"
+        else
+          warn "gemini: could not seed roblox-game into ~/.agents/skills"
+        fi
       fi
     fi
 
     for prof in codex cursor windsurf cline github-copilot trae; do
-      SHARED=0
       case "$prof" in
-        codex)          command -v codex >/dev/null 2>&1 || continue; SHARED=1 ;;
-        cursor)         [ -d "$HOME/.cursor" ] || continue; SHARED=1 ;;
+        codex)          command -v codex >/dev/null 2>&1 || continue ;;
+        cursor)         [ -d "$HOME/.cursor" ] || continue ;;
         windsurf)       [ -d "$HOME/.codeium/windsurf" ] || continue ;;
-        cline)          [ -d "$HOME/.clinerules" ] || continue; SHARED=1 ;;
-        github-copilot) { [ -d "$HOME/.config/github-copilot" ] || [ -d "$HOME/.copilot" ]; } || continue; SHARED=1 ;;
+        cline)          { [ -d "$HOME/.clinerules" ] || [ -d "$HOME/.cline" ]; } || continue ;;
+        github-copilot) { [ -d "$HOME/.config/github-copilot" ] || [ -d "$HOME/.copilot" ]; } || continue ;;
         trae)           [ -d "$HOME/.trae" ] || continue ;;
       esac
-
-      if [ "$SHARED" = 1 ] && [ "$GEM_HAS_RGS" = 1 ]; then
-        skip "$prof: uses ~/.agents/skills, already covered by the gemini extension"
-        continue
-      fi
 
       if [ "$DRY_RUN" = 1 ]; then
         info "\$ npx skills add $RBX_SKILL_SLUG -a $prof -g"
@@ -413,6 +430,12 @@ if [ "$DO_ROBLOX" = 1 ]; then
   merge_mcp_json() {
     local file="$1" key="$2" schema="$3" shape="$4"
     local dir; dir=$(dirname "$file")
+    # node_json is a no-op under --dry-run, so say what would happen and stop
+    # before mkdir — a dry run must not create directories either.
+    if [ "$DRY_RUN" = 1 ]; then
+      info "\$ merge robloxstudio into $file"
+      return 2
+    fi
     [ -d "$dir" ] || mkdir -p "$dir" 2>/dev/null || { warn "cannot create $dir"; return 1; }
     node_json '
       const fs=require("fs");
@@ -426,9 +449,12 @@ if [ "$DO_ROBLOX" = 1 ]; then
       }
       if(schema && !cfg["$schema"]) cfg["$schema"]=schema;
       cfg[key]=cfg[key]||{};
-      cfg[key].robloxstudio = shape==="opencode"
-        ? {type:"local",command:["npx","-y",pkg+"@"+ver,"--auto-install-plugin"],enabled:true}
-        : {command:"npx",args:["-y",pkg+"@"+ver,"--auto-install-plugin"]};
+      const args=["-y",pkg+"@"+ver,"--auto-install-plugin"];
+      cfg[key].robloxstudio =
+        shape==="opencode" ? {type:"local",command:["npx",...args],enabled:true}
+      // Cline nests the transport instead of keeping command/args at top level.
+      : shape==="cline"    ? {transport:{type:"stdio",command:"npx",args}}
+      :                      {command:"npx",args};
       fs.writeFileSync(file,JSON.stringify(cfg,null,2)+"\n");
     ' "$file" "$key" "$schema" "$shape" "$RBX_PKG" "$RBX_VERSION"
   }
@@ -452,22 +478,25 @@ if [ "$DO_ROBLOX" = 1 ]; then
 
   # --- opencode
   if [ -d "$OPENCODE_DIR" ]; then
-    if merge_mcp_json "$OPENCODE_DIR/opencode.json" "mcp" "https://opencode.ai/config.json" "opencode"; then
-      ok "opencode MCP registered"
-    else
-      warn "opencode MCP merge failed (see message above)"
-    fi
+    # rc 2 = dry run reported the plan and wrote nothing; not a failure.
+    merge_mcp_json "$OPENCODE_DIR/opencode.json" "mcp" "https://opencode.ai/config.json" "opencode"
+    case $? in
+      0) ok "opencode MCP registered" ;;
+      2) : ;;
+      *) warn "opencode MCP merge failed (see message above)" ;;
+    esac
   else
     skip "opencode not found"
   fi
 
   # --- Gemini CLI
   if command -v gemini >/dev/null 2>&1; then
-    if merge_mcp_json "$GEMINI_DIR/settings.json" "mcpServers" "" "standard"; then
-      ok "gemini CLI MCP registered"
-    else
-      warn "gemini settings.json merge failed"
-    fi
+    merge_mcp_json "$GEMINI_DIR/settings.json" "mcpServers" "" "standard"
+    case $? in
+      0) ok "gemini CLI MCP registered" ;;
+      2) : ;;
+      *) warn "gemini settings.json merge failed" ;;
+    esac
   else
     skip "gemini CLI not found"
   fi
@@ -475,12 +504,13 @@ if [ "$DO_ROBLOX" = 1 ]; then
   # --- Antigravity (IDE + CLI share ~/.gemini/config/mcp_config.json)
   if [ -d "$HOME/.antigravity" ] || command -v agy >/dev/null 2>&1 \
      || command -v antigravity >/dev/null 2>&1; then
-    if merge_mcp_json "$ANTIGRAVITY_MCP" "mcpServers" "" "standard"; then
-      ok "antigravity MCP registered ($ANTIGRAVITY_MCP)"
-      info "restart Antigravity, then Manage MCP Servers to verify"
-    else
-      warn "antigravity mcp_config.json merge failed"
-    fi
+    merge_mcp_json "$ANTIGRAVITY_MCP" "mcpServers" "" "standard"
+    case $? in
+      0) ok "antigravity MCP registered ($ANTIGRAVITY_MCP)"
+         info "restart Antigravity, then Manage MCP Servers to verify" ;;
+      2) : ;;
+      *) warn "antigravity mcp_config.json merge failed" ;;
+    esac
   else
     skip "antigravity not found"
   fi
@@ -508,8 +538,40 @@ EOF
     skip "codex not found"
   fi
 
+  # --- Cline CLI
+  # `cline mcp install --yes` writes the config itself, which beats guessing
+  # the schema — the CLI nests the transport where every other agent keeps
+  # command/args flat. Fall back to a direct merge if the CLI is absent (the
+  # VS Code extension reads the same file).
+  if command -v cline >/dev/null 2>&1; then
+    if [ -f "$CLINE_MCP" ] && grep -q '"robloxstudio"' "$CLINE_MCP" 2>/dev/null && [ "$FORCE" = 0 ]; then
+      skip "cline: robloxstudio already registered"
+    elif [ "$DRY_RUN" = 1 ]; then
+      info "\$ cline mcp install robloxstudio --yes -- npx -y $RBX_PKG@$RBX_VERSION"
+    else
+      CLINE_OUT=$(cline mcp install robloxstudio --transport stdio --yes -- \
+        npx -y "$RBX_PKG@$RBX_VERSION" --auto-install-plugin 2>&1 || true)
+      if printf '%s' "$CLINE_OUT" | grep -qi 'installed'; then
+        ok "cline MCP registered"
+      else
+        warn "cline mcp install failed"
+      fi
+    fi
+  elif [ -d "$HOME/.cline" ]; then
+    merge_mcp_json "$CLINE_MCP" "mcpServers" "" "cline"
+    case $? in
+      0) ok "cline MCP registered (config merge)" ;;
+      2) : ;;
+      *) warn "cline mcp settings merge failed" ;;
+    esac
+  else
+    skip "cline not found"
+  fi
+
   # --- Studio plugin (.rbxmx) — the Studio half of the connection
-  if run npx -y "$RBX_PKG@$RBX_VERSION" --install-plugin; then
+  if [ "$DRY_RUN" = 1 ]; then
+    info "\$ npx -y $RBX_PKG@$RBX_VERSION --install-plugin"
+  elif run npx -y "$RBX_PKG@$RBX_VERSION" --install-plugin; then
     ok "Roblox Studio plugin installed"
   else
     warn "Studio plugin install failed — run manually: npx -y $RBX_PKG@$RBX_VERSION --install-plugin"

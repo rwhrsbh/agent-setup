@@ -24,19 +24,21 @@ Sets up [caveman](https://github.com/JuliusBrussee/caveman) in ultra mode, the
 | opencode | ✅ | — | ✅ | ✅ |
 | Gemini CLI | ✅ | — | ✅ | ✅ |
 | Antigravity (`agy`) | ✅ | — | ✅ | ✅ |
-| Codex | ✅ | — | ✅ | ✳️ |
-| Windsurf · Trae | ✅ | — | — | ✅ |
-| Cursor · Cline · Copilot | ✅ | — | — | ✳️ |
+| Cline | ✅ | — | ✅ | ✅ |
+| Codex | ✅ | — | ✅ | ✅ |
+| Cursor · Windsurf · Trae · Copilot | ✅ | — | — | ✅ |
 
 Badge is Claude Code only — it's the one agent with a configurable statusline.
-opencode's TUI has no plugin-writable badge; Gemini, Antigravity and Codex have no
-statusline hook at all.
+opencode's TUI has no plugin-writable badge; Gemini, Antigravity, Cline and Codex
+have no statusline hook at all.
 
-✳️ Codex, Cursor, Cline and Copilot all read skills from the shared
-`~/.agents/skills` tree — which Gemini CLI scans too. Installing there alongside the
-Gemini extension makes Gemini report a skill conflict and shadow one copy with the
-other, so the skill goes in only when Gemini isn't already providing it. If you don't
-use Gemini CLI, they get it outright.
+Codex, Cursor, Cline and Copilot share one skills tree at `~/.agents/skills`, and
+Gemini CLI reads it too — so every one of them is served by a single copy. That is
+why the script installs **no Gemini extension**: an extension duplicates skills
+Gemini already sees in the shared tree, and Gemini responds by renaming the commands
+(`/caveman` becomes `/caveman1`) and shadowing one copy. Gemini instead gets its
+always-on caveman rule from `~/.gemini/GEMINI.md`, which imports the same shared
+files. Any leftover extension from an older run is removed.
 
 Ultra mode is the default. Change it with `--mode lite|full|ultra`.
 
@@ -77,6 +79,7 @@ their MCP servers connect — the config is written, you sign in once.
 ```bash
 npx -y github:JuliusBrussee/caveman -- --uninstall
 claude mcp remove robloxstudio
+rm -rf ~/.agents/skills          # shared skills (codex/cursor/cline/copilot/gemini)
 ```
 
 MIT
